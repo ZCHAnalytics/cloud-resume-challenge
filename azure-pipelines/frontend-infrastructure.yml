@@ -1,0 +1,406 @@
+# ========================
+# ✅ PIPELINE: Deploy Frontend Infrastructure with Terraform
+# ========================
+# 🎯 Trigger pipeline on changes to main branch and specific files
+
+name: frontend-infrastructure
+trigger: none 
+
+resources:
+  pipelines:
+    - pipeline: destroy-infrastructure
+      source: destroyInfra
+      trigger: none
+#         branches:
+#           include:
+#             - main
+
+# Agent Pool
+pool:
+  name: 'Default'
+
+variables:
+  # Variable group containing tfstateStorageAccount, tfstateResourceGroup, 
+  # tfstateContainer, tfstateKey, backendServiceArm.
+  - group: terraform-variables 
+  - name: tfstateKey
+    value: $(tfstateKeyFrontend)
+
+  - name: terraformWorkingDir
+    value: '$(System.DefaultWorkingDirectory)/infrastructure/frontend'
+
+  - name: frontendWorkingDir
+    value: '$(System.DefaultWorkingDirectory)/frontend-app'
+ 
+  - name: azureServiceConnection
+    value: '$(backendServiceArm)'
+
+stages:
+  # ========================
+  # 🚀 STAGE: Deploy Frontend Infrastructure
+  # ========================
+  - stage: DeployFrontendInfra
+    displayName: 'Deploy Frontend Infrastructure'
+    jobs:
+      - job: TerraformDeploy
+        displayName: 'Terraform Plan & Apply'
+        steps: 
+          - checkout: self
+          
+          # Clean up any local state files
+          - task: PowerShell@2
+            displayName: '🧹 Clean Local State Files'
+            inputs:
+              targetType: 'inline'
+              script: |
+                $ErrorActionPreference = 'Stop'
+                Write-Host "Cleaning up local state files..."
+                
+                $filesToRemove = @('terraform.tfstate', 'terraform.tfstate.backup', '.terraform.lock.hcl')
+                foreach ($file in $filesToRemove) {
+                  $filePath = Join-Path "$(terraformWorkingDir)" $file
+                  if (Test-Path $filePath) {
+                    Remove-Item $filePath -Force
+                    Write-Host "Removed: $file"
+                  }
+                }
+
+                $terraformDir = Join-Path "$(terraformWorkingDir)" '.terraform'
+                if (Test-Path $terraformDir) {
+                  Remove-Item $terraformDir -Recurse -Force
+                  Write-Host "Removed: .terraform directory"
+                }
+
+          # Azure CLI Login using service connection
+          - task: AzureCLI@2
+            displayName: '🔐 Azure CLI Login'
+            inputs:
+              azureSubscription: '$(backendServiceArm)'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                Write-Host "Logged in to Azure CLI"
+
+
+          # Verify Terraform backend config and clean local state files
+          - task: PowerShell@2
+            displayName: '🔍 Verify Terraform Backend Configuration and Clean Local State'
+            inputs:
+              targetType: 'inline'
+              script: |
+                Write-Host "=== VERIFYING TERRAFORM CONFIGURATION ==="
+
+                $mainTfPath = Join-Path $env:terraformWorkingDir 'main.tf'
+                if (Test-Path $mainTfPath) {
+                  Write-Host "Found main.tf"
+                  $content = Get-Content $mainTfPath -Raw
+                  if ($content -match 'backend\s+"azurerm"') {
+                    Write-Host "Backend block found in main.tf"
+                    $backendBlock = ($content | Select-String -Pattern 'backend\s+"azurerm"\s*{[^}]*}' -AllMatches).Matches.Value
+                    Write-Host "Backend configuration:`n$backendBlock"
+                  }
+                  else {
+                    Write-Error "No backend block found in main.tf!"
+                    exit 1
+                  }
+                }
+                else {
+                  Write-Error "main.tf not found!"
+                  exit 1
+                }
+
+                # Remove local terraform state files
+                Write-Host "Cleaning up local state files..."
+                $stateFiles = @('terraform.tfstate', 'terraform.tfstate.backup', '.terraform.lock.hcl')
+                foreach ($file in $stateFiles) {
+                  $filePath = Join-Path $env:terraformWorkingDir $file
+                  if (Test-Path $filePath) {
+                    Remove-Item $filePath -Force
+                    Write-Host "Removed: $file"
+                  }
+                }
+
+                # Remove .terraform directory if exists
+                $terraformDir = Join-Path $env:terraformWorkingDir '.terraform'
+                if (Test-Path $terraformDir) {
+                  Remove-Item $terraformDir -Recurse -Force
+                  Write-Host "Removed: .terraform directory"
+                }
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+
+          # Verify backend storage account and container existence
+          - task: AzureCLI@2
+            displayName: '🔍 Verify Backend Storage Account and Container'
+            inputs:
+              azureSubscription: '$(backendServiceArm)'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                Write-Host "=== VERIFYING BACKEND STORAGE ==="
+
+                $storageAccount = $env:tfstateStorageAccount
+                $resourceGroup = $env:tfstateResourceGroup
+                $container = $env:tfstateContainer
+
+                $storageExists = az storage account show --name $storageAccount --resource-group $resourceGroup --query name -o tsv 2>$null
+                if ($storageExists -eq $storageAccount) {
+                  Write-Host "Storage account '$storageAccount' exists"
+
+                  $containerExists = az storage container exists --account-name $storageAccount --name $container --auth-mode login --query exists -o tsv 2>$null
+                  if ($containerExists -eq "true") {
+                    Write-Host "Container '$container' exists"
+                  }
+                  else {
+                    Write-Host "Container '$container' does not exist! Creating..."
+                    az storage container create --name $container --account-name $storageAccount --auth-mode login
+                    Write-Host "Container created"
+                  }
+                }
+                else {
+                  Write-Error "Storage account '$storageAccount' does not exist!"
+                  exit 1
+                }
+
+          # 🔧 Terraform Init
+          - task: TerraformTaskV4@4
+            displayName: '🚀 Terraform Init with Remote Backend'
+            inputs: 
+              provider: 'azurerm'
+              command: 'init'
+              backendServiceArm: '$(backendServiceArm)'
+              backendAzureRmResourceGroupName: '$(tfstateResourceGroup)'
+              backendAzureRmStorageAccountName: '$(tfstateStorageAccount)'
+              backendAzureRmContainerName: '$(tfstateContainer)'
+              backendAzureRmKey: '$(tfstateKey)'
+              workingDirectory: '$(terraformWorkingDir)'
+              commandOptions: '-upgrade'
+
+          - task: AzureCLI@2
+            displayName: 'Verify State File Access'
+            inputs:
+              azureSubscription: '$(backendServiceArm)'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                Write-Host "Checking state file accessibility..." -ForegroundColor Yellow
+                
+                try {
+                  # Get blob info
+                  $blobInfo = az storage blob show `
+                    --name "$(tfstateKey)" `
+                    --container-name "$(tfstateContainer)" `
+                    --account-name "$(tfstateStorageAccount)" `
+                    --auth-mode login `
+                    --output json | ConvertFrom-Json
+                  
+                  if ($blobInfo) {
+                    Write-Host "Blob found" -ForegroundColor Green
+                    Write-Host "Size: $($blobInfo.properties.contentLength) bytes" -ForegroundColor Cyan
+                    Write-Host "Last Modified: $($blobInfo.properties.lastModified)" -ForegroundColor Cyan
+                    Write-Host "Lease Status: $($blobInfo.properties.lease.status)" -ForegroundColor Cyan
+                    
+                    # Download state to check if it's valid
+                    Write-Host "`nDownloading state file to validate..." -ForegroundColor Yellow
+                    $tempFile = "state-validation.json"
+                    
+                    az storage blob download `
+                      --name "$(tfstateKey)" `
+                      --container-name "$(tfstateContainer)" `
+                      --account-name "$(tfstateStorageAccount)" `
+                      --auth-mode login `
+                      --file $tempFile `
+                      --overwrite
+                    
+                    if (Test-Path $tempFile) {
+                      # Check if it's valid JSON
+                      try {
+                        $stateContent = Get-Content $tempFile -Raw | ConvertFrom-Json
+                        Write-Host "State file is valid JSON" -ForegroundColor Green
+                        Write-Host "Terraform Version: $($stateContent.terraform_version)" -ForegroundColor Cyan
+                        Write-Host "Resources Count: $($stateContent.resources.Count)" -ForegroundColor Cyan
+                      } catch {
+                        Write-Host "State file might be corrupted" -ForegroundColor Red
+                        Write-Host "Error: $_" -ForegroundColor Red
+                      }
+                      Remove-Item $tempFile -Force
+                    }
+                  }
+                  
+                  Write-Host "`nState file is accessible and unlocked" -ForegroundColor Green
+                  exit 0  # Explicitly set success
+                  
+                } catch {
+                  Write-Host "Error accessing state file: $_" -ForegroundColor Red
+                  exit 1
+                }
+
+          - task: PowerShell@2
+            displayName: 'Debug Terraform Connectivity'
+            condition: failed() 
+            timeoutInMinutes: 2
+            inputs:
+              targetType: 'inline'
+              script: |
+                cd "$(terraformWorkingDir)"
+                
+                Write-Host "Testing Terraform with timeout..." -ForegroundColor Yellow
+                
+                # Create a simple timeout mechanism
+                $job = Start-Job -ScriptBlock {
+                  param($workDir, $terraformPath)
+                  Set-Location $workDir
+                  & $terraformPath version
+                  & $terraformPath init -backend=false
+                } -ArgumentList "$(terraformWorkingDir)", "C:\ProgramData\chocolatey\bin\terraform.exe"
+                
+                # Wait for 30 seconds max
+                $result = Wait-Job $job -Timeout 30
+                
+                if ($result) {
+                  $output = Receive-Job $job
+                  Write-Host "Terraform responded:" -ForegroundColor Green
+                  Write-Host $output
+                } else {
+                  Write-Host "Terraform command timed out after 30 seconds" -ForegroundColor Red
+                  Stop-Job $job -Force
+                  Remove-Job $job -Force
+                  
+                  # Check if terraform process is stuck
+                  $tfProcesses = Get-Process -Name "terraform" -ErrorAction SilentlyContinue
+                  if ($tfProcesses) {
+                    Write-Host "Found stuck terraform processes:" -ForegroundColor Yellow
+                    $tfProcesses | Format-Table Id, StartTime, CPU
+                    Write-Host "Killing stuck processes..." -ForegroundColor Yellow
+                    $tfProcesses | Stop-Process -Force
+                  }
+                }
+
+          - task: AzureCLI@2
+            displayName: '🔓 Force Unlock Terraform Blob Lease if Stuck'
+            inputs:
+              azureSubscription: '$(backendServiceArm)'
+              scriptType: 'ps'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                Write-Host "Checking lease on state blob..." -ForegroundColor Yellow
+
+                $blob = az storage blob show `
+                  --account-name "$(tfstateStorageAccount)" `
+                  --container-name "$(tfstateContainer)" `
+                  --name "$(tfstateKey)" `
+                  --auth-mode login `
+                  --output json | ConvertFrom-Json
+
+                $leaseState = $blob.properties.lease.state
+                $leaseStatus = $blob.properties.lease.status
+
+                Write-Host "Lease State: $leaseState"
+                Write-Host "Lease Status: $leaseStatus"
+
+                if ($leaseStatus -eq "locked" -and $leaseState -eq "leased") {
+                  Write-Host "Locked blob detected - attempting force break..." -ForegroundColor Yellow
+
+                  $leaseBreak = az storage blob lease break `
+                    --blob-name "$(tfstateKey)" `
+                    --container-name "$(tfstateContainer)" `
+                    --account-name "$(tfstateStorageAccount)" `
+                    --auth-mode login `
+                    --output none
+
+                  Write-Host "Lease successfully broken - state is now unlocked" -ForegroundColor Green
+                } else {
+                  Write-Host "No active lock detected - continuing" -ForegroundColor Green
+                }
+
+          - task: TerraformTaskV4@4
+            displayName: '📋 Terraform Plan'
+            inputs: 
+              provider: 'azurerm'
+              command: 'plan'
+              environmentServiceNameAzureRM: '$(backendServiceArm)'
+              workingDirectory: '$(terraformWorkingDir)'
+              commandOptions: '-out=tfplan -detailed-exitcode'
+
+          # 📊 Display Plan Summary
+          - task: PowerShell@2
+            displayName: '📊 Display Plan Summary'
+            condition: succeededOrFailed()
+            inputs:
+              targetType: 'inline'
+              script: |
+                cd "$(terraformWorkingDir)"
+                
+                Write-Host "`n TERRAFORM PLAN SUMMARY" -ForegroundColor Cyan
+                Write-Host "========================" -ForegroundColor Cyan
+                
+                $planOutput = terraform show -no-color tfplan
+                
+                # Count changes
+                $toAdd = ($planOutput | Select-String "will be created").Count
+                $toChange = ($planOutput | Select-String "will be updated").Count
+                $toDestroy = ($planOutput | Select-String "will be destroyed").Count
+                
+                Write-Host "`n Changes Summary:" -ForegroundColor Yellow
+                Write-Host " To create: $toAdd" -ForegroundColor Green
+                Write-Host " To update: $toChange" -ForegroundColor Yellow
+                Write-Host " To destroy: $toDestroy" -ForegroundColor Red
+                
+                # Show detailed changes
+                Write-Host "`n📝 Detailed Changes:" -ForegroundColor Yellow
+                $planOutput | Select-String -Pattern "will be|must be|No changes" | ForEach-Object {
+                  if ($_ -match "created") { Write-Host "  $_" -ForegroundColor Green }
+                  elseif ($_ -match "destroyed") { Write-Host "  $_" -ForegroundColor Red }
+                  elseif ($_ -match "updated") { Write-Host "  $_" -ForegroundColor Yellow }
+                  else { Write-Host "   $_" -ForegroundColor Gray }
+                }
+
+          # 🚀 Terraform Apply (using the plan from same workspace)
+          - task: TerraformTaskV4@4
+            displayName: '🚀 Terraform Apply'
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              environmentServiceNameAzureRM: '$(backendServiceArm)'
+              workingDirectory: '$(terraformWorkingDir)'
+              commandOptions: '-auto-approve tfplan'
+
+          # ✅ Final Verification
+          - task: AzureCLI@2
+            displayName: '✅ Verify Deployment'
+            condition: succeeded()
+            inputs:
+              azureSubscription: '$(backendServiceArm)'
+              scriptType: 'ps'
+              scriptLocation: inlineScript
+              inlineScript: |
+                Write-Host "`n✅ DEPLOYMENT VERIFICATION" -ForegroundColor Green
+                Write-Host "=========================" -ForegroundColor Green
+                
+                # Verify state file in blob storage
+                $stateExists = az storage blob exists `
+                    --account-name $(tfstateStorageAccount) `
+                    --container-name $(tfstateContainer) `
+                    --name $(tfstateKey) `
+                    --auth-mode login `
+                    --query "exists" -o tsv
+                
+                if ($stateExists -eq "true") {
+                    Write-Host "✅ Remote state file successfully updated" -ForegroundColor Green
+                    
+                    # Get state file details
+                    $blobDetails = az storage blob show `
+                        --account-name $(tfstateStorageAccount) `
+                        --container-name $(tfstateContainer) `
+                        --name $(tfstateKey) `
+                        --auth-mode login `
+                        --query "{size:properties.contentLength, lastModified:properties.lastModified}" -o json | ConvertFrom-Json
+                    
+                    Write-Host "   Size: $($blobDetails.size) bytes" -ForegroundColor Gray
+                    Write-Host "   Last Modified: $($blobDetails.lastModified)" -ForegroundColor Gray
+                }
+                
+                # List resources created
+                Write-Host "`n📦 Resources in State:" -ForegroundColor Cyan
+                cd $(terraformWorkingDir)
+                terraform state list | ForEach-Object {
+                  Write-Host "   - $_

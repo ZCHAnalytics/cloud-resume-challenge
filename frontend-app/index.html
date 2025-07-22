@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Zulfia's cloud resume showcasing skills in Azure, AI, and DevOps">
+  <title>Zulfia's Cloud Resume with Azure - Cloud, AI & DevOps Enthusiast</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <a href="#resume-content" class="skip-link">Skip to main content</a>
+  
+  <header id="main-header" role="banner">
+    <h1>Zulfia</h1>
+    <p>Cloud, AI & DevOps Enthusiast</p>
+  </header>
+
+  <main id="resume-content" role="main">
+
+    <section id="skills" class="resume-section" aria-labelledby="skills-heading">
+      <h2 id="skills-heading"><span aria-hidden="true">🎯</span> Skills & Certifications</h2>
+      <ul>
+        <li><strong>📜 Certifications:</strong> AZ-900 • AI-900</li>
+        <li><strong>☁️ Cloud & <abbr title="Infrastructure as Code">IaC</abbr>:</strong> Azure • Terraform • GitHub Actions • Azure DevOps</li>
+        <li><strong>⚡ Serverless:</strong> Azure Functions • Cosmos DB (Table API)</li>
+        <li><strong>💻 Languages:</strong> Python • PowerShell • Bash • <abbr title="Structured Query Language">SQL</abbr></li>
+        <li><strong>🐳 Containers & Orchestration:</strong> Docker • Kubernetes</li>
+        <li><strong>🚀 Projects & Labs:</strong> Cloud Resume Challenge • Kubernetes Resume Challenge</li>
+      </ul>
+    </section>
+
+    <section id="projects" class="resume-section" aria-labelledby="projects-heading">
+      <h2 id="projects-heading"><span aria-hidden="true">📁</span> Projects</h2>
+
+      <h3><span aria-hidden="true">☁️</span> Cloud Projects</h3>
+      <ul>
+        <li>
+          <strong><a href="https://github.com/ZCHAnalytics/cloud-resume-challenge" target="_blank" rel="noopener noreferrer">
+            Cloud Resume Challenge (Azure, Terraform, <abbr title="Continuous Integration/Continuous Deployment">CI/CD</abbr>)
+            <span class="sr-only">(opens in new tab)</span>
+          </a></strong>
+          <ul>
+            <li>🏗️ Hosted static resume site on Azure with serverless visitor tracking via Azure Functions + Cosmos DB.</li>
+            <li>🔧 Infrastructure as Code (Terraform) with remote state in Azure Storage, deployed via <strong>Azure DevOps Pipelines</strong>.</li>
+            <li>🔄 Implemented CI/CD with both Azure DevOps and GitHub Actions, including Cypress E2E tests.</li>
+            <li>🔒 Security: <abbr title="Software Bill of Materials">SBOM</abbr> generation (Syft), vulnerability scanning (Grype, Bandit, Semgrep), minimal <abbr title="Role-Based Access Control">RBAC</abbr> permissions.</li>
+            <li>
+              📂 <strong>GitHub Actions versions:</strong> 
+              <a href="https://github.com/ZCHAnalytics/shecodesclouds-frontend" target="_blank" rel="noopener noreferrer">Frontend <span class="sr-only">(opens in new tab)</span></a> |
+              <a href="https://github.com/ZCHAnalytics/shecodesclouds-backend" target="_blank" rel="noopener noreferrer">Backend <span class="sr-only">(opens in new tab)</span></a>
+            </li>
+          </ul>
+        </li>
+
+        <li>
+          <strong><a href="https://github.com/ZCHAnalytics/azure-database-migration" target="_blank" rel="noopener noreferrer">
+            Azure Database Migration
+            <span class="sr-only">(opens in new tab)</span>
+          </a></strong>
+          <ul>
+            <li>💾 Restored production <abbr title="Database">DB</abbr> into a dev-safe environment; implemented disaster recovery with Entra ID auth.</li>
+          </ul>
+        </li>
+      </ul>
+
+      <h3><span aria-hidden="true">📊</span> Data Projects</h3>
+      <ul>
+        <li>
+          <strong><a href="https://github.com/ZCHAnalytics/aws-python-data-centralisation" target="_blank" rel="noopener noreferrer">
+            Retail Sales <abbr title="Extract, Transform, Load">ETL</abbr> & Data Analysis
+            <span class="sr-only">(opens in new tab)</span>
+          </a></strong>
+          <ul>
+            <li>🐍 <abbr title="Object-Oriented Programming">OOP</abbr> Python scripts to extract & transform 120k+ rows from <abbr title="Amazon Web Services">AWS</abbr>, <abbr title="Application Programming Interfaces">APIs</abbr>, JSON, PDF, and CSV.</li>
+            <li>📈 Built star-schema model and wrote analytical SQL for actionable business insights.</li>
+          </ul>
+        </li>
+      </ul>
+
+      <h3><span aria-hidden="true">⚙️</span> Platform Engineering & Kubernetes</h3>
+      <ul>
+        <li>
+          <strong><a href="https://github.com/ZCHAnalytics/kubernetes-resume-challenge" target="_blank" rel="noopener noreferrer">
+            Kubernetes Resume Challenge (Windows + PowerShell)
+            <span class="sr-only">(opens in new tab)</span>
+          </a></strong>
+          <ul>
+            <li>🪟 Adapted a Linux-based <abbr title="Kubernetes">K8s</abbr> challenge to Windows using PowerShell, Helm, and Terraform.</li>
+            <li>🎯 Created autoscaling cluster, CI/CD pipeline, persistent DB storage, and secure secrets handling.</li>
+          </ul>
+        </li>
+      </ul>
+    </section>
+
+    <section id="education" class="resume-section" aria-labelledby="education-heading">
+      <h2 id="education-heading"><span aria-hidden="true">🎓</span> Education</h2>
+      <ul>
+        <li>AiCore AI & Data Bootcamp, UK, 2024</li>
+        <li><abbr title="Master of Philosophy">MPhil</abbr>, University of Cambridge, UK, 2010</li>
+      </ul>
+    </section>
+
+    <section id="visitor-count-section" aria-labelledby="visitor-heading" aria-live="polite" aria-atomic="true">
+      <h2 id="visitor-heading"><span aria-hidden="true">👁️</span> Visitor Counter</h2>
+      <p>
+        Number of visitors:
+        <span id="visitor-count" role="status">Loading...</span>
+      </p>
+    </section>
+
+  </main>
+
+  <footer id="main-footer" role="contentinfo">
+    <p>© 2025 Zulfia C.H. | Last updated July 2025</p>
+  </footer>
+
+  <script src="visitor-counter.js"></script>
+</body>
+</html>

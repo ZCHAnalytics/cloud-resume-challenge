@@ -1,0 +1,323 @@
+# ------------------------------------------------------------------ 
+# Pipeline: Backend Function Deployment
+# Description: Deploys the backend Azure Function app on pushes to main branch
+# ------------------------------------------------------------------
+name: backend-function
+trigger: none 
+
+resources:
+  pipelines:
+    - pipeline: frontend-infrastructure
+      source: frontendInfra
+      trigger: none
+
+# Use local agent 
+pool:
+  name: 'Default'
+
+variables:
+   # Variable group containing tf state vars and backendServiceArm
+  - group: terraform-variables 
+
+  - name: tfstateKey
+    value: $(tfstateKeyBackend)
+
+  - name: terraformWorkingDir
+    value: '$(System.DefaultWorkingDirectory)/infrastructure/backend'
+
+  - name: backendWorkingDir
+    value: '$(System.DefaultWorkingDirectory)/backend-api'
+ 
+  - name: azureServiceConnection  
+    value: '$(backendServiceArm)'
+
+jobs:
+  - job: extract_terraform_outputs
+    displayName: Extract Terraform Outputs
+    pool: 
+      name: 'Default'
+    steps:
+      - checkout: self
+      
+      # Initialise Terraform
+      - task: TerraformTaskV4@4
+        displayName: 'Terraform Init'
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(terraformWorkingDir)'
+          backendServiceArm: '$(backendServiceArm)'
+          backendAzureRmResourceGroupName: '$(tfstateResourceGroup)'
+          backendAzureRmStorageAccountName: '$(tfstateStorageAccount)'
+          backendAzureRmContainerName: '$(tfstateContainer)'
+          backendAzureRmKey: '$(tfstateKey)'
+
+      # ------------------------------------------------------------
+      # Extract all tf outputs dynamically and publish for reuse
+      # ------------------------------------------------------------
+      - task: PowerShell@2
+        name: ExtractOutputStep
+        displayName: 'Extract Terraform Outputs (Auto) with filtering'
+        inputs:
+          targetType: 'inline'
+          workingDirectory: '$(terraformWorkingDir)'
+          script: |
+            Write-Host "=== Extracting Terraform outputs with sensitive filtering ===" -ForegroundColor Cyan
+
+            # First, see ALL outputs
+            Write-Host "`nALL Terraform outputs:" -ForegroundColor Yellow
+            terraform output
+            
+            $sensitiveKeys = @("cosmosdb_primary_key", "application_insights_key")
+
+            $outputsJson = terraform output -json | ConvertFrom-Json
+            
+            Write-Host "`nAll output keys found:" -ForegroundColor Yellow
+            $outputsJson.PSObject.Properties.Name | ForEach-Object { Write-Host " - $_" }
+
+            $filteredOutputs = @{}
+
+            foreach ($key in $outputsJson.PSObject.Properties.Name) {
+                $value = $outputsJson.$key.value
+                if ($sensitiveKeys -contains $key) {
+                    Write-Host "Skipping sensitive output: $key" -ForegroundColor Red
+                }
+                else {
+                    Write-Host "##vso[task.setvariable variable=$key;isOutput=true]$value"
+                    Write-Host "$key = $value" -ForegroundColor Green
+                    $filteredOutputs[$key] = $value
+                }
+            }
+            
+            # Specifically check for CDN-related outputs
+            Write-Host "`nChecking for CDN-related outputs:" -ForegroundColor Yellow
+            $cdnKeys = $outputsJson.PSObject.Properties.Name | Where-Object { $_ -like "*cdn*" -or $_ -like "*endpoint*" }
+            if ($cdnKeys) {
+                $cdnKeys | ForEach-Object { 
+                    Write-Host "Found CDN output: $_ = $($outputsJson.$_.value)" -ForegroundColor Cyan
+                }
+            } else {
+                Write-Host "No CDN-related outputs found!" -ForegroundColor Red
+            }
+            
+            $artifactPath = "$(Build.ArtifactStagingDirectory)\terraform-outputs.json"
+            $filteredOutputs | ConvertTo-Json -Depth 10 | Out-File -FilePath $artifactPath -Encoding utf8
+
+            Write-Host "`nTerraform outputs saved to: $artifactPath" -ForegroundColor Green
+            Write-Host "JSON content:" -ForegroundColor Yellow
+            Get-Content $artifactPath
+
+      - publish: $(Build.ArtifactStagingDirectory)/terraform-outputs.json
+        artifact: terraformOutputs
+        displayName: 'Publish Terraform Outputs JSON'
+
+      # --------------------------- SBOM + Grype Security Steps -----------------------------
+      
+      - task: PowerShell@2
+        displayName: Generate SBOM
+        inputs:
+          targetType: inline
+          workingDirectory: '$(backendWorkingDir)'
+          script: |
+            $sbomPath = Join-Path -Path "$(backendWorkingDir)" -ChildPath "sbom.json"
+            
+            # Generate SBOM directly to file without encoding issues
+            & syft . --output json=$sbomPath
+            
+            # Verify the file exists
+            if (Test-Path $sbomPath) {
+              Write-Output "sbom.json created successfully at: $sbomPath"
+              
+              # Display file size for verification
+              $fileInfo = Get-Item $sbomPath
+              Write-Output "File size: $($fileInfo.Length) bytes"
+              
+              # Optionally validate JSON format
+              try {
+                $jsonContent = Get-Content $sbomPath -Raw | ConvertFrom-Json
+                Write-Output "JSON validation successful"
+              } catch {
+                Write-Error "JSON validation failed: $_"
+              }
+            } else {
+              Write-Error "sbom.json NOT found at expected path."
+              exit 1
+            }
+
+      - task: PowerShell@2
+        displayName: Scan SBOM with Grype
+        inputs:
+          targetType: inline
+          workingDirectory: '$(backendWorkingDir)'
+          script: |
+            # Run Grype scan on the SBOM
+            Write-Output "Running Grype scan on SBOM..."
+            
+            grype sbom:sbom.json -o table --fail-on medium
+
+      - task: PublishBuildArtifacts@1
+        displayName: Upload SBOM Artifact
+        inputs:
+          PathtoPublish: '$(backendWorkingDir)\sbom.json'
+          ArtifactName: 'sbom-backend'
+
+      - task: PowerShell@2
+        displayName: List files in backend folder after scanning
+        inputs:
+          targetType: inline
+          script: |
+            Write-Output "Listing files in backend folder:"
+            Get-ChildItem "$(backendWorkingDir)" | Format-Table Name, Length, LastWriteTime
+      
+      # --- Security Scanning Steps End ---
+      
+  # Azure Functions Core Tools are already installed on local agent func --version > 4.0.7512 
+
+  - job: deploy_function
+    displayName: Deploy Backend Function
+    dependsOn: extract_terraform_outputs
+    pool:
+      name: 'Default'
+
+    variables:
+      # Correct variable references for output variables from extraction job
+      functionAppName: $[ dependencies.extract_terraform_outputs.outputs['ExtractOutputStep.function_app_name'] ]
+      functionAppUrl: $[ dependencies.extract_terraform_outputs.outputs['ExtractOutputStep.function_app_url'] ]
+      apiEndpoint: $[ dependencies.extract_terraform_outputs.outputs['ExtractOutputStep.api_endpoint'] ]
+      resourceGroup: $[ dependencies.extract_terraform_outputs.outputs['ExtractOutputStep.resource_group_name'] ]
+      
+    steps:
+      # Azure CLI Login using service connection
+      - task: AzureCLI@2
+        displayName: 'Azure CLI Login'
+        inputs:
+          azureSubscription: '$(backendServiceArm)'
+          scriptType: 'ps'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            Write-Host "Logged in to Azure CLI"
+
+      # Deploy Azure Function App
+      - task: PowerShell@2
+        displayName: 'Deploy Azure Function'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "=== Deploying Azure Function ===" -ForegroundColor Cyan
+            cd $(backendWorkingDir)
+            Write-Host "Installing Python dependencies..."
+            pip install -r requirements.txt
+            
+            Write-Host "Deploying to Function App: $(functionAppName)"
+            func azure functionapp publish $(functionAppName) --python
+
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Function deployment successful" -ForegroundColor Green
+            } else {
+              Write-Error "Function deployment failed"
+              exit 1
+            }
+      # Test deployed Azure Function
+      - task: PowerShell@2
+        displayName: 'Test Azure Function'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "=== Testing Deployed Function ===" -ForegroundColor Cyan
+            Write-Host "Waiting 30 seconds for function to be ready..."
+            Start-Sleep -Seconds 30
+            
+            Write-Host "Testing function at: $(apiEndpoint)?visitorId=test123"
+            try {
+              $response = Invoke-RestMethod -Uri "$(apiEndpoint)?visitorId=test123" -Method Get
+              Write-Host "Response received:" -ForegroundColor Green
+              Write-Host ($response | ConvertTo-Json -Depth 10)
+              Write-Host "Function test successful" -ForegroundColor Green
+            } catch {
+              Write-Warning "Function test failed: $_"
+            }
+
+      # Get the Function App's default hostname (PowerShell version)
+      - task: PowerShell@2
+        name: GetFunctionAppUrl
+        displayName: 'Get Function App URL'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "Fetching Function App default hostname..."
+            $functionAppName = "$(functionAppName)"
+            $resourceGroup = "$(resourceGroup)"
+
+            $functionAppUrl = az functionapp show `
+              --name $functionAppName `
+              --resource-group $resourceGroup `
+              --query defaultHostName `
+              -o tsv
+
+            if (-not [string]::IsNullOrEmpty($functionAppUrl)) {
+                $fullUrl = "https://$functionAppUrl"
+                Write-Host "Function App URL: $fullUrl"
+                Write-Host "##vso[task.setvariable variable=functionAppUrl]$fullUrl"
+            } else {
+                Write-Error "Failed to retrieve Function App URL"
+                exit 1
+            }
+      - task: PowerShell@2
+        displayName: 'Create Runtime Config for Web Deployment'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "=== Creating Runtime Configuration ===" -ForegroundColor Cyan
+            
+            # Get the API endpoint (from GetFunctionAppUrl task or terraform outputs)
+            $apiEndpoint = "$(apiEndpoint)"  # From terraform outputs
+            $functionAppUrl = "$(functionAppUrl)"  # From GetFunctionAppUrl task
+            
+            Write-Host "API Endpoint: $apiEndpoint" -ForegroundColor Green
+            Write-Host "Function App URL: $functionAppUrl" -ForegroundColor Green
+            
+            # Create config.json for runtime consumption
+            $runtimeConfig = @{
+                apiUrl = $apiEndpoint
+                functionAppUrl = $functionAppUrl
+                environment = "production"
+                version = "$(Build.BuildNumber)"
+                timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
+            }
+            
+            $runtimeConfigJson = $runtimeConfig | ConvertTo-Json -Depth 10
+            $runtimeConfigPath = "$(Build.ArtifactStagingDirectory)/config.json"
+            
+            # Save config.json (this will be deployed to web root)
+            $runtimeConfigJson | Out-File -FilePath $runtimeConfigPath -Encoding utf8
+            
+            Write-Host "Runtime config.json created:" -ForegroundColor Yellow
+            Write-Host $runtimeConfigJson
+            
+            # Also create a deployment info file for pipeline consumption
+            $deploymentInfo = @{
+                apiEndpoint = $apiEndpoint
+                functionAppUrl = $functionAppUrl
+                configCreated = Get-Date
+                buildId = "$(Build.BuildId)"
+            }
+            
+            $deploymentInfoPath = "$(Build.ArtifactStagingDirectory)/deployment-info.json"
+            $deploymentInfo | ConvertTo-Json -Depth 10 | Out-File -FilePath $deploymentInfoPath -Encoding utf8
+            
+            Write-Host "Deployment info saved to: $deploymentInfoPath"
+
+      # Publish both files as artifacts
+      - publish: $(Build.ArtifactStagingDirectory)/config.json
+        artifact: runtimeConfig
+        displayName: 'Publish Runtime Config (config.json)'
+
+      - publish: $(Build.ArtifactStagingDirectory)/deployment-info.json
+        artifact: deploymentInfo
+        displayName: 'Publish Deployment Info'     
+           
+      # (Optional) List backend directory contents for debugging
+      - powershell: |
+          Write-Host "Backend directory contents:"
+          Get-ChildItem -Path $(backendWorkingDir) -Force
+        displayName: 'List Backend Directory'

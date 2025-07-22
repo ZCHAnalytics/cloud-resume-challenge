@@ -1,0 +1,58 @@
+name: destroy-infrastructure
+
+trigger: none  
+pool:
+  name: 'Default'
+  
+variables:
+  # Variable group containing tfstateStorageAccount, tfstateResourceGroup, 
+  # tfstateContainer, tfstateKey, backendServiceArm.
+  - group: terraform-variables 
+  - name: tfstateKey
+    value: $(tfstateKeyFrontend)
+
+  - name: terraformWorkingDir
+    value: '$(System.DefaultWorkingDirectory)/infrastructure/frontend'
+
+
+  - name: azureServiceConnection
+    value: '$(backendServiceArm)'
+
+jobs:
+  - job: destroy_infra
+    displayName: "Destroy Terraform Infrastructure"
+    steps:
+
+      # Azure CLI Login using service connection
+      - task: AzureCLI@2
+        displayName: '🔐 Azure CLI Login'
+        inputs:
+          azureSubscription: '$(backendServiceArm)'
+          scriptType: 'ps'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            Write-Host "Logged in to Azure CLI"
+      
+      # 🔧 Terraform Init
+      - task: TerraformTaskV4@4
+        displayName: '🚀 Terraform Init with Remote Backend'
+        inputs: 
+          provider: 'azurerm'
+          command: 'init'
+          backendServiceArm: '$(backendServiceArm)'
+          backendAzureRmResourceGroupName: '$(tfstateResourceGroup)'
+          backendAzureRmStorageAccountName: '$(tfstateStorageAccount)'
+          backendAzureRmContainerName: '$(tfstateContainer)'
+          backendAzureRmKey: '$(tfstateKey)'
+          workingDirectory: '$(terraformWorkingDir)'
+          commandOptions: '-upgrade'
+
+      # Destroy Infrastructure     
+      - task: TerraformTaskV4@4
+        displayName: '💥 Terraform Destroy'
+        inputs:
+          provider: 'azurerm'
+          command: 'destroy'
+          workingDirectory: '$(terraformWorkingDir)'
+          environmentServiceNameAzureRM: '$(backendServiceArm)'
+          commandOptions: '-auto-approve'

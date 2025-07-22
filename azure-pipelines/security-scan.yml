@@ -1,0 +1,116 @@
+name: 'Security-Scan-$(Date:yyyyMMdd)$(Rev:.r)'
+
+trigger: none 
+  # branches:
+  #   include:
+  #     - main
+
+variables:
+  projectName: 'crcazuredevops'
+
+jobs:
+- job: security_scan
+  displayName: 'CRC Security Scan'
+  pool:
+    name: 'Default'
+
+  steps:
+    - checkout: self
+
+    # Run Semgrep scan
+    - script: |
+        @echo off
+        echo [SCAN] Running Semgrep security scan...
+        semgrep --config=auto --quiet . 2>nul
+        if %ERRORLEVEL% EQU 0 (
+            echo [OK] No security issues found
+        ) else if %ERRORLEVEL% LEQ 2 (
+            echo [INFO] Semgrep found some issues - check output above
+        )
+        exit /b 0
+      displayName: 'Semgrep Security Scan'
+
+    # Run Bandit for Python
+    - script: |
+        @echo off
+        echo [SCAN] Running Bandit Python security scan...
+        bandit -r . --exclude ./tests,./venv,./env 2>nul
+        echo [OK] Bandit scan completed
+      displayName: 'Bandit Python Scan'
+      continueOnError: true
+
+    # Check dependencies
+    - script: |
+        @echo off
+        echo [DEPS] Checking Python dependencies...
+        if exist requirements.txt (
+            safety check --file requirements.txt
+            echo [OK] Safety check completed
+        ) else (
+            echo [SKIP] No requirements.txt found
+        )
+      displayName: 'Dependency Security Check'
+      continueOnError: true
+
+    # Generate and display report directly
+    # with enhanced security scan to see exactly what's being flagged
+    - task: PowerShell@2
+      displayName: '📋 SECURITY SCAN DETAILED DEBUG'
+      inputs:
+        targetType: 'inline'
+        script: |
+          Write-Host "=== DETAILED SECURITY SCAN DEBUG ===" -ForegroundColor Cyan
+          
+          # First, let's see the actual content of function_app.py
+          $functionAppPath = Get-ChildItem -Path . -Filter "function_app.py" -Recurse | Select-Object -First 1
+          
+          if ($functionAppPath) {
+              Write-Host "`nFound function_app.py at: $($functionAppPath.FullName)" -ForegroundColor Yellow
+              Write-Host "File last modified: $($functionAppPath.LastWriteTime)" -ForegroundColor Yellow
+              Write-Host "`nFile content preview (first 50 lines):" -ForegroundColor Yellow
+              Get-Content $functionAppPath.FullName | Select-Object -First 50 | ForEach-Object {$i=1} {
+                  Write-Host ("{0,3}: {1}" -f $i++, $_)
+              }
+          }
+          
+          # Now check what patterns are matching
+          Write-Host "`n=== CHECKING SECURITY PATTERNS ===" -ForegroundColor Cyan
+          
+          $patterns = @{
+              "api_key=" = 'api_key\s*='
+              "api-key=" = 'api-key\s*='
+              "apikey=" = 'apikey\s*='
+              "password=" = 'password\s*=\s*["'']'
+              "AccountKey=" = 'AccountKey='
+              "secret=" = 'secret\s*=\s*["'']'
+          }
+          
+          foreach ($file in Get-ChildItem -Include *.py -Recurse) {
+              $content = Get-Content $file.FullName -Raw
+              $matched = $false
+              
+              foreach ($patternName in $patterns.Keys) {
+                  if ($content -match $patterns[$patternName]) {
+                      if (-not $matched) {
+                          Write-Host "`nFile: $($file.Name)" -ForegroundColor Red
+                          $matched = $true
+                      }
+                      
+                      # Find the exact line
+                      $lines = $content -split "`n"
+                      for ($i = 0; $i -lt $lines.Count; $i++) {
+                          if ($lines[$i] -match $patterns[$patternName]) {
+                              Write-Host "  Pattern '$patternName' found on line $($i+1):" -ForegroundColor Yellow
+                              Write-Host "  > $($lines[$i].Trim())" -ForegroundColor White
+                          }
+                      }
+                  }
+              }
+          }
+          
+          # Check if the file has been updated in the pipeline
+          Write-Host "`n=== GIT STATUS ===" -ForegroundColor Cyan
+          git status --porcelain
+          
+          Write-Host "`n=== RECENT COMMITS ===" -ForegroundColor Cyan
+          git log --oneline -5

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.Python
+env/
+venv/
+
+# Node (not needed for Python functions)
+node_modules/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.log
+
+# Azure Functions
+local.settings.json
+bin/
+obj/
+
+# Generated files
+sbom.json
+*.log
+
+# OS`
+.DS_Store
+Thumbs.db
+
+environment.yml  
+.conda/
+steps.md
+security-check.md
+setup-security-tools.ps1
+.troubleshoot-templates/

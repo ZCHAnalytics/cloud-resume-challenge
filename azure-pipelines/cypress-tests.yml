@@ -1,0 +1,160 @@
+name: cypress-tests
+# trigger: none 
+
+resources:
+  pipelines:
+    - pipeline: backend-function
+      source: backendFunctionApp
+      trigger: none 
+      
+pool: 
+  name: 'Default'
+
+variables:
+  - name: terraformWorkingDir
+    value: '$(System.DefaultWorkingDirectory)'
+
+jobs:
+  - job: e2etests
+    displayName: "Run Cypress Tests"
+ 
+    steps:
+      - checkout: self
+      # Download all artifacts from backend-function pipeline
+      
+      - download: backend-function
+        artifact: terraformOutputs
+        
+      - download: backend-function
+        artifact: runtimeConfig
+        
+      - download: backend-function
+        artifact: deploymentInfo
+      
+      # Add a verification step
+      - task: PowerShell@2
+        displayName: 'Verify Downloaded Artifacts'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "Checking backend-function artifacts:"
+            Get-ChildItem -Path "$(Pipeline.Workspace)/backend-function" -Recurse
+            
+            Write-Host "`nChecking frontend-web-deploy artifacts:"
+            Get-ChildItem -Path "$(Pipeline.Workspace)/frontend-web-deploy" -Recurse
+
+      - task: PowerShell@2
+        name: ReadConfigurations
+        displayName: 'Read Configuration Outputs'
+        inputs:
+          targetType: 'inline'
+          script: |
+            # Read terraform outputs
+            $terraformOutputsPath = "$(Pipeline.Workspace)/backend-function/terraformOutputs/terraform-outputs.json"
+            $terraformOutputs = Get-Content $terraformOutputsPath | ConvertFrom-Json
+            
+            # Read runtime config
+            $runtimeConfigPath = "$(Pipeline.Workspace)/backend-function/runtimeConfig/config.json"
+            $runtimeConfig = Get-Content $runtimeConfigPath | ConvertFrom-Json
+            
+            # Read deployment info
+            $deploymentInfoPath = "$(Pipeline.Workspace)/backend-function/deploymentInfo/deployment-info.json"
+            $deploymentInfo = Get-Content $deploymentInfoPath | ConvertFrom-Json
+            
+            # Set variables from all sources
+            $cdnUrl = "https://$($terraformOutputs.cdn_endpoint_name).azureedge.net"
+            $apiUrl = $runtimeConfig.apiUrl
+            $functionAppUrl = $deploymentInfo.functionAppUrl
+            
+            # Set pipeline variables
+            Write-Host "##vso[task.setvariable variable=frontendUrl]$cdnUrl"
+            Write-Host "##vso[task.setvariable variable=apiUrl]$apiUrl"
+            Write-Host "##vso[task.setvariable variable=functionAppUrl]$functionAppUrl"
+            
+            Write-Host "`n📋 Configuration Summary:" -ForegroundColor Cyan
+            Write-Host "Frontend URL (CDN): $cdnUrl"
+            Write-Host "API URL: $apiUrl"
+            Write-Host "Function App URL: $functionAppUrl"
+            
+      - task: PowerShell@2
+        displayName: 'Echo Output URLs'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "Frontend URL: $(frontendUrl)"
+            Write-Host "API URL: $(apiUrl)"
+
+      - task: PowerShell@2
+        displayName: 'List Cypress spec files'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "Looking for terraform.cy.js..."
+            Get-ChildItem -Recurse -Path "$(System.DefaultWorkingDirectory)" | Where-Object { $_.Name -eq 'terraform.cy.js' }
+
+      - task: NodeTool@0
+        inputs:
+          versionSpec: '16.x'
+        displayName: "Setup Node.js"
+
+      - task: PowerShell@2
+        displayName: 'Install NPM dependencies'
+        inputs:
+          targetType: 'inline'
+          script: |
+            if (Test-Path "package-lock.json") {
+              npm ci
+            } else {
+              npm install
+            }
+
+      - task: PowerShell@2
+        displayName: 'Wait for frontend to become available'
+        inputs:
+          targetType: 'inline'
+          script: |
+            $url = "$(frontendUrl)"
+            for ($i = 1; $i -le 10; $i++) {
+              Write-Host "Checking if frontend is available (attempt $i)..."
+              try {
+                Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5
+                Write-Host "Frontend is available!"
+                break
+              } catch {
+                Write-Host "Not ready yet. Retrying in 10 seconds..."
+                Start-Sleep -Seconds 10
+              }
+              if ($i -eq 10) {
+                Write-Error "Frontend did not become available in time."
+                exit 1
+              }
+            }
+
+      - task: PowerShell@2
+        displayName: 'Run Cypress tests'
+        inputs:
+          targetType: 'inline'
+          workingDirectory: '$(System.DefaultWorkingDirectory)'
+          script: |
+            # Ensure we're in the right directory
+            Write-Host "Current directory: $(Get-Location)"
+            Write-Host "Frontend URL: $(frontendUrl)"
+            Write-Host "API URL: $(apiUrl)"
+            
+            # Set Cypress environment variables
+            $env:CYPRESS_BASE_URL = "$(frontendUrl)"
+            
+            # Install dependencies if needed
+            if (Test-Path "package.json") {
+              npm install
+            }
+            
+            # Run Cypress with explicit override
+            Write-Host "`nStarting Cypress tests..."
+            
+            # Use the call operator & to ensure proper execution
+            & npx cypress run `
+              --spec "tests/cypress/e2e/terraform.cy.js" `
+              --config baseUrl="$(frontendUrl)" `
+              --env apiUrl="$(apiUrl)" `
+              --reporter spec

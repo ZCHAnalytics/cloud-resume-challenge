@@ -1,0 +1,320 @@
+# ========================
+# ✅ PIPELINE: Deploy Frontend Web Pages with Terraform
+# ========================
+
+name: deploy-frontend-files
+
+trigger: none 
+
+# This pipeline is triggered by function app pipeline completing on main branch
+resources:
+  pipelines:
+    - pipeline: backend-function
+      source: backendFunctionApp 
+      trigger: none
+
+# ========================
+# 🛠️ Agent Pool & Global Variables
+# ========================
+pool:
+  name: 'Default'
+
+variables:
+  # Variable group containing tfstateStorageAccount, tfstateResourceGroup, 
+  # tfstateContainer, tfstateKey, backendServiceArm.
+  - group: terraform-variables 
+
+  - name: tfstateKey
+    value: $(tfstateKeyFrontend)
+
+  - name: terraformWorkingDir
+    value: '$(System.DefaultWorkingDirectory)/infrastructure/frontend'
+
+  - name: frontendWorkingDir
+    value: '$(System.DefaultWorkingDirectory)/frontend-app'
+ 
+  - name: azureServiceConnection
+    value: '$(backendServiceArm)'
+
+# ========================
+# 🚀 Job: Deploy Web Files
+# ========================
+jobs:
+  - job: deploy_web_files
+    displayName: Deploy Web Files
+    pool:
+      name: 'Default'
+    steps:
+      - checkout: self 
+
+      # ✅ Download the config.json that backend pipeline created
+      - task: DownloadPipelineArtifact@2
+        displayName: 'Download Runtime Config from Backend Pipeline'
+        inputs:
+          buildType: 'specific'
+          project: '$(System.TeamProject)'
+          pipeline: 'backendFunctionApp' 
+          buildVersionToDownload: 'latest'
+          artifactName: 'runtimeConfig'
+          targetPath: '$(System.ArtifactsDirectory)'
+
+      - task: PowerShell@2
+        displayName: 'List contents of $(System.ArtifactsDirectory)'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "Listing contents of artifact directory:"
+            Get-ChildItem "$(System.ArtifactsDirectory)" -Recurse | ForEach-Object { Write-Host $_.FullName }
+
+      - task: PowerShell@2
+        displayName: 'List contents of downloaded artifacts'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Get-ChildItem -Path "$(System.ArtifactsDirectory)" -Recurse
+
+      # ✅ Copy the ready-made config.json to frontend directory
+      - task: PowerShell@2
+        displayName: 'Deploy config.json from Backend Pipeline'
+        inputs:
+          targetType: 'inline'
+          script: |
+            Write-Host "=== Deploying config.json from Backend Pipeline ===" -ForegroundColor Cyan
+            
+            # Updated path - artifact downloads directly to specified folder
+            $sourceConfig = "$(System.ArtifactsDirectory)/config.json"
+            $targetConfig = "$(frontendWorkingDir)/config.json"
+            
+            Write-Host "Source: $sourceConfig"
+            Write-Host "Target: $targetConfig"
+            
+            # Create target directory if it doesn't exist
+            if (-not (Test-Path $(frontendWorkingDir))) {
+                New-Item -ItemType Directory -Path $(frontendWorkingDir) -Force
+                Write-Host "Created directory: $(frontendWorkingDir)"
+            }
+            
+            if (Test-Path $sourceConfig) {
+                # Copy the config.json from backend
+                Copy-Item $sourceConfig $targetConfig -Force
+                
+                Write-Host "config.json copied successfully!" -ForegroundColor Green
+                
+                # Show what we got
+                $content = Get-Content $targetConfig | ConvertFrom-Json
+                Write-Host "📋 Deployed config content:" -ForegroundColor Yellow
+                Write-Host "  API URL: $($content.apiUrl)"
+                Write-Host "  Function App URL: $($content.functionAppUrl)"
+                Write-Host "  Environment: $($content.environment)"
+                Write-Host "  Version: $($content.version)"
+                
+                # Set pipeline variable for Cypress tests
+                Write-Host "##vso[task.setvariable variable=visitorCounterUrl]$($content.apiUrl)"
+                
+            } else {
+                Write-Host "Config file not found. Debugging..." -ForegroundColor Red
+                Write-Host "Available artifacts:" -ForegroundColor Yellow
+                if (Test-Path "$(System.ArtifactsDirectory)") {
+                    Get-ChildItem "$(System.ArtifactsDirectory)" -Recurse | ForEach-Object { 
+                        Write-Host "  $($_.FullName)" 
+                    }
+                } else {
+                    Write-Host "  No artifacts directory found"
+                }
+                exit 1
+            }
+      # # ----------------------------------------
+      # # 🔐 Security Scanning: SBOM + Vulnerability Scan
+      # # ----------------------------------------
+
+      # - task: PowerShell@2
+      #   displayName: Generate SBOM
+      #   inputs:
+      #     targetType: inline
+      #     workingDirectory: '$(Build.SourcesDirectory)'
+      #     script: |
+      #       $sbomPath = Join-Path -Path "$(frontendWorkingDir)" -ChildPath "sbom.json"
+            
+      #       # Generate SBOM directly to file without encoding issues
+      #       & syft . --output json=$sbomPath
+            
+      #       # Verify the file exists
+      #       if (Test-Path $sbomPath) {
+      #         Write-Output "sbom.json created successfully at: $sbomPath"
+              
+      #       } else {
+      #         Write-Error "sbom.json NOT found at expected path."
+      #         exit 1
+      #       }
+
+      # - task: PowerShell@2
+      #   displayName: Scan SBOM with Grype
+      #   inputs:
+      #     targetType: inline
+      #     workingDirectory: '$(frontendWorkingDir)'
+      #     script: |
+      #       # Run Grype scan on the SBOM
+      #       Write-Output "Running Grype scan on SBOM..."
+            
+      #       grype sbom:sbom.json -o table --fail-on medium
+
+      # - task: PublishBuildArtifacts@1
+      #   displayName: Upload SBOM Artifact
+      #   inputs:
+      #     PathtoPublish: '$(frontendWorkingDir)\sbom.json'
+      #     ArtifactName: 'sbom-frontend'
+
+      # - task: PowerShell@2
+      #   displayName: List files in frontend folder after scanning
+      #   inputs:
+      #     targetType: inline
+      #     script: |
+      #       Write-Output "Listing files in frontend folder:"
+      #       Get-ChildItem "$(frontendWorkingDir)" | Format-Table Name, Length, LastWriteTime
+
+      # # --- Security Scanning Steps End ---
+      
+      # ----------------------------------------
+      # 🏗 Terraform Init and Output Extraction
+      # ----------------------------------------
+      - task: TerraformTaskV4@4
+        displayName: 'Terraform Init (Frontend)'
+        inputs:
+          provider: 'azurerm'
+          command: 'init'
+          workingDirectory: '$(terraformWorkingDir)'
+          backendServiceArm: '$(backendServiceArm)'
+          backendAzureRmResourceGroupName: '$(tfstateResourceGroup)'
+          backendAzureRmStorageAccountName: '$(tfstateStorageAccount)'
+          backendAzureRmContainerName: '$(tfstateContainer)'
+          backendAzureRmKey: '$(tfstateKey)'
+
+      - task: PowerShell@2
+        displayName: 'Extract Terraform Outputs as JSON'
+        inputs:
+          targetType: 'inline'
+          workingDirectory: '$(terraformWorkingDir)'
+          script: |
+            $outputsJson = terraform output -json
+            $outputs = $outputsJson | ConvertFrom-Json
+
+            Write-Host "##vso[task.setvariable variable=resourceGroupName]$($outputs.resource_group_name.value)"
+            Write-Host "##vso[task.setvariable variable=location]$($outputs.location.value)"
+            Write-Host "##vso[task.setvariable variable=staticSiteUrl]$($outputs.static_site_url.value)"
+            Write-Host "##vso[task.setvariable variable=storageAccountName]$($outputs.storage_account_name.value)"
+            Write-Host "##vso[task.setvariable variable=cdnEndpointName]$($outputs.cdn_endpoint_name.value)"
+            Write-Host "##vso[task.setvariable variable=cdnProfileName]$($outputs.cdn_profile_name.value)"
+      
+      # Check if Storage Data Contributor Role Granted 
+      - task: AzureCLI@2
+        displayName: 'Verify Storage Access'
+        inputs:
+          azureSubscription: '$(backendServiceArm)'
+          scriptType: 'ps'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            Write-Host "Checking storage account access..."
+            
+            # Function to test storage access 
+            function Test-StorageAccess {
+              param($AccountName)
+              try {
+                  $result = az storage container list --account-name $AccountName --query "[0].name" -0 tsv 2>&1
+                  return $LASTEXITCOE -eq 0
+                }
+                catch {
+                  return $false
+                }
+              }
+              
+      # --- Upload Web Files ---
+      - task: AzureCLI@2
+        displayName: 'Upload Web Files'
+        inputs:
+          azureSubscription: '$(backendServiceArm)'
+          scriptType: 'ps'
+          scriptLocation: 'inlineScript'
+          workingDirectory: '$(frontendWorkingDir)'
+          inlineScript: |
+            $account = "$(storageAccountName)"
+            $resourceGroup = "$(resourceGroupName)"
+            
+            # Get storage account key
+            $storageKey = az storage account keys list `
+              --resource-group $resourceGroup `
+              --account-name $account `
+              --query "[0].value" -o tsv
+            
+            $extensions = @("*.html", "*.css", "*.js", "*.json", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.svg", "*.ico")
+            
+            foreach ($ext in $extensions) {
+                Write-Host "Uploading $ext files..."
+                
+                az storage blob upload-batch `
+                    --account-name $account `
+                    --account-key $storageKey `
+                    --source ./ `
+                    --destination `$web `
+                    --pattern $ext `
+                    --overwrite
+            }
+      # ----------------------------------------
+      # 🔄 Purge CDN Cache (for fresh content)
+      # ----------------------------------------
+      - task: PowerShell@2
+        displayName: Purge CDN Cache
+        inputs:
+          targetType: inline
+          script: |
+            $cdn = "$(cdnEndpointName)"
+            $profile = "$(cdnProfileName)"
+            $rg = "$(resourceGroupName)"
+            $exists = az cdn endpoint show --resource-group $rg --profile-name $profile --name $cdn --query "name" -o tsv 2>$null
+            if ($exists) {
+              az cdn endpoint purge --resource-group $rg --profile-name $profile --name $cdn --content-paths "/*" --no-wait
+              Write-Host "CDN cache purged."
+            } else {
+              Write-Warning "CDN endpoint not found, skipping purge."
+            }
+
+      # ----------------------------------------
+      # ✅ Deployment Summary
+      # ----------------------------------------
+      - task: PowerShell@2
+        displayName: Deployment Summary
+        inputs:
+          targetType: inline
+          script: |
+            $cdnUrl = "https://$(cdnEndpointName).azureedge.net"
+            Write-Host "##vso[task.setvariable variable=cdnUrl]$cdnUrl"
+            Write-Host "Frontend deployed to $cdnUrl"
+
+  # # ========================
+  # # 🔎 Optional Job: JavaScript Dependency Scan
+  # # ========================
+
+  # - job: dependency_scan
+  #   displayName: JavaScript Dependency Scan
+  #   pool:
+  #     name: 'Default'
+
+  #     steps:
+  #     - task: NodeTool@0
+  #       inputs:
+  #         versionSpec: '22.x'
+
+  #     - task: PowerShell@2
+  #       displayName: Install Node Modules
+  #       inputs:
+  #         targetType: inline
+  #         workingDirectory: '$(System.DefaultWorkingDirectory)/frontend'
+  #         script: |
+  #           npm install
+
+  #     - task: PowerShell@2
+  #       displayName: NPM Audit
+  #       inputs:
+  #         targetType: inline
+  #         workingDirectory: '$(System.DefaultWorkingDirectory)/frontend'
+  #         script: |
+  #           npm audit --audit-level=moderate

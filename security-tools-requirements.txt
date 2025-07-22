@@ -1,0 +1,4 @@
+semgrep>=1.45.0
+bandit[toml]>=1.7.5
+detect-secrets>=1.4.0
+safety>=2.3.5
