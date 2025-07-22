@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Azure DevOps Cloud Resume Challenge
 
 This repo provides the backend and frontend code that adapts the traditional  [Cloud Resume Challenge](https://cloudresumechallenge.dev/) for **Azure DevOps**. 
@@ -46,7 +45,3 @@ The backend service runs a **visitor counter API** via Azure Functions, which tr
 - Commits are signed and saved using `GPG secure commit`.
 
 ***
-=======
-# cloud-resume-challenge_with_azuredevops
-Conversion of traditional GitHub Actions-based Cloud Resume Challenge to AzureDevOps
->>>>>>> ebc1f6aab41b276f8e7d34abcbc9ae7da6f7a6b7

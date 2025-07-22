@@ -25,10 +25,10 @@ data "terraform_remote_state" "frontend" {
   backend = "azurerm"
 
   config = {
-    resource_group_name   = "tfstate-netcompany-rg"
-    storage_account_name  = "tfstatenetcompanyzch"
-    container_name       = "tfstatenetcompany"
-    key                  = "frontend.netcompany.tfstate"
+    resource_group_name   = "tfstate-rg"
+    storage_account_name  = "tfstatenetzch"
+    container_name       = "tfstatecontainer"
+    key                  = "frontend.tfstate"
   }
 }
 

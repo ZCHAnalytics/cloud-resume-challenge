@@ -6,6 +6,6 @@
 # -------------------------------------------------------------------
 
 # Backend vars
-function_storage_name   = "netcompanyfuncstorage"        # Storage used by the Azure Function App
-function_app_name       = "netcompany-func-app"         # Azure Function App name (must be globally unique)
-cosmosdb_account_name   = "netcompany-cosmos"                # CosmosDB account name
+function_storage_name   = "zchresumefuncstorage"        # Storage used by the Azure Function App
+function_app_name       = "resume-func-app"         # Azure Function App name (must be globally unique)
+cosmosdb_account_name   = "resume-cosmos"                # CosmosDB account name

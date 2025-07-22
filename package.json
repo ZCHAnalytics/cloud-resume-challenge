@@ -8,12 +8,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://systemasolaris@dev.azure.com/systemasolaris/cloudresumechallenge/_git/cloudresumechallenge"
+    "url": "https://github.com/ZCHAnalytics/cloud-resume-challenge_with_azuredevops"
   },
   "keywords": ["azure", "azure functions", "azure devops", "ci/cd", "cloud resume challenge", "terraform", "accessibility"],
   "author": "Zulfia",
   "license": "MIT",
-    "homepage": "https://netcompany-resume.azureedge.net",
+    "homepage": "https://shecodesclouds.azureedge.net",
   "devDependencies": {
     "cypress": "^14.5.1"
   }

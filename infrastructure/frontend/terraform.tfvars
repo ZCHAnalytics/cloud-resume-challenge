@@ -6,13 +6,13 @@
 # -------------------------------------------------------------------
 
 # Shared vars
-resource_group_name  = "netcompany-rg"               # Used for all Azure resources
+resource_group_name  = "resume-rg"               # Used for all Azure resources
 location             = "uksouth"                         # Azure region for deployment
 
 # Frontend vars
-cdn_endpoint_name    = "netcompany-resume"                  # Reserved for CDN if used in future
-cdn_profile_name     = "netcompany-cdn-profile" # Required for Azure CDN 
+cdn_endpoint_name    = "shecodesclouds"                  # Reserved for CDN if used in future
+cdn_profile_name     = "resume-cdn-profile" # Required for Azure CDN 
 
-frontend_origin_urls = ["https://netcompany-resume.azureedge.net"] # CORS whitelist for Function App, currently 1
+frontend_origin_urls = ["https://shecodesclouds.azureedge.net"] # CORS whitelist for Function App, currently 1
 
-storage_account_name = "netcompanywebstorage" 
+storage_account_name = "zchresumewebstorage" 

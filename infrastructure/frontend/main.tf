@@ -41,7 +41,7 @@ resource "azurerm_storage_account_static_website" "static_site" {
 
 # CDN Profile required to create a CDN Endpoint
 resource "azurerm_cdn_profile" "cdn_profile" {
-  name                = var.cdn_profile_name  # e.g. "netcompany-cdn-profile"
+  name                = var.cdn_profile_name  
   location            = "Global"
   resource_group_name = azurerm_resource_group.main.name
   sku                 = "Standard_Microsoft"
@@ -49,13 +49,13 @@ resource "azurerm_cdn_profile" "cdn_profile" {
 
 # CDN Endpoint to serve static site globally
 resource "azurerm_cdn_endpoint" "cdn_endpoint" {
-  name                = var.cdn_endpoint_name # e.g. "netcompanhy-resume"
+  name                = var.cdn_endpoint_name 
   profile_name        = azurerm_cdn_profile.cdn_profile.name
   location            = "Global"
   resource_group_name = azurerm_resource_group.main.name
 
   origin {
-    name      = "netcompany-resume-origin"
+    name      = "zch-resume-origin"
     host_name = azurerm_storage_account.frontend_storage.primary_web_host
   }
 
